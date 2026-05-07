@@ -1,0 +1,184 @@
+{
+  "_type": "export",
+  "version": 4,
+  "resources": [
+    {
+      "_id": "wrk_dataws_api",
+      "_type": "workspace",
+      "name": "DataWS API — CNPJ",
+      "description": "API de consulta de dados cadastrais de empresas (Receita Federal)"
+    },
+    {
+      "_id": "env_base",
+      "_type": "environment",
+      "parentId": "wrk_dataws_api",
+      "name": "Base",
+      "data": {
+        "base_url": "http://localhost:8080"
+      }
+    },
+    {
+      "_id": "fld_health",
+      "_type": "request_group",
+      "parentId": "wrk_dataws_api",
+      "name": "🟢 Health"
+    },
+    {
+      "_id": "req_health",
+      "_type": "request",
+      "parentId": "fld_health",
+      "name": "Health Check",
+      "method": "GET",
+      "url": "{{ _.base_url }}/health",
+      "description": "Verifica se a API está no ar e quais backends estão ativos.",
+      "headers": [],
+      "parameters": []
+    },
+    {
+      "_id": "fld_cnpj",
+      "_type": "request_group",
+      "parentId": "wrk_dataws_api",
+      "name": "🏢 CNPJ"
+    },
+    {
+      "_id": "req_get_by_cnpj",
+      "_type": "request",
+      "parentId": "fld_cnpj",
+      "name": "Buscar por CNPJ completo",
+      "method": "GET",
+      "url": "{{ _.base_url }}/api/v1/cnpjs/33000167000101",
+      "description": "Retorna dados completos de uma empresa pelo CNPJ de 14 dígitos (com ou sem máscara).\n\nRetorna:\n- Dados cadastrais da empresa\n- Endereço e contato do estabelecimento\n- Quadro Societário (QSA) com todos os sócios\n- Situação no Simples Nacional / MEI",
+      "headers": [],
+      "parameters": []
+    },
+    {
+      "_id": "req_search_nome",
+      "_type": "request",
+      "parentId": "fld_cnpj",
+      "name": "Buscar por Nome",
+      "method": "GET",
+      "url": "{{ _.base_url }}/api/v1/cnpjs",
+      "description": "Busca por razão social ou nome fantasia (busca parcial, sem acento).",
+      "headers": [],
+      "parameters": [
+        { "name": "nome", "value": "padaria", "description": "Razão social ou nome fantasia — busca parcial" },
+        { "name": "page", "value": "1", "description": "Página (padrão: 1)" },
+        { "name": "limit", "value": "20", "description": "Itens por página (padrão: 20, máx: 100)" }
+      ]
+    },
+    {
+      "_id": "req_search_cnpj_basico",
+      "_type": "request",
+      "parentId": "fld_cnpj",
+      "name": "Buscar por CNPJ básico (matriz + filiais)",
+      "method": "GET",
+      "url": "{{ _.base_url }}/api/v1/cnpjs",
+      "description": "Passando os 8 primeiros dígitos do CNPJ retorna a matriz e todas as filiais.",
+      "headers": [],
+      "parameters": [
+        { "name": "cnpj", "value": "33000167", "description": "Bloco básico do CNPJ (8 dígitos)" },
+        { "name": "page", "value": "1" },
+        { "name": "limit", "value": "20" }
+      ]
+    },
+    {
+      "_id": "req_search_cpf_completo",
+      "_type": "request",
+      "parentId": "fld_cnpj",
+      "name": "Buscar por CPF de sócio (completo)",
+      "method": "GET",
+      "url": "{{ _.base_url }}/api/v1/cnpjs",
+      "description": "Busca todas as empresas onde o sócio possui exatamente este CPF (11 dígitos, sem máscara).",
+      "headers": [],
+      "parameters": [
+        { "name": "cpf", "value": "12345678901", "description": "CPF completo do sócio (11 dígitos)" },
+        { "name": "page", "value": "1" },
+        { "name": "limit", "value": "20" }
+      ]
+    },
+    {
+      "_id": "req_search_cpf_parcial",
+      "_type": "request",
+      "parentId": "fld_cnpj",
+      "name": "Buscar por CPF de sócio (parcial)",
+      "method": "GET",
+      "url": "{{ _.base_url }}/api/v1/cnpjs",
+      "description": "Busca empresas cujos sócios tenham CPF contendo o fragmento informado.",
+      "headers": [],
+      "parameters": [
+        { "name": "cpf", "value": "123456", "description": "Fragmento do CPF do sócio" },
+        { "name": "page", "value": "1" },
+        { "name": "limit", "value": "20" }
+      ]
+    },
+    {
+      "_id": "req_search_combinado",
+      "_type": "request",
+      "parentId": "fld_cnpj",
+      "name": "Busca combinada (todos os filtros)",
+      "method": "GET",
+      "url": "{{ _.base_url }}/api/v1/cnpjs",
+      "description": "Demonstra a busca com todos os parâmetros combinados ao mesmo tempo.\n\nParâmetros disponíveis:\n• cnpj — CNPJ completo (14 dígitos) ou básico (8 dígitos)\n• nome — Razão social ou nome fantasia (parcial)\n• cpf — CPF do sócio (completo ou parcial)\n• uf — Sigla do estado (ex: SP, RJ, MG)\n• municipio — Nome do município (parcial)\n• situacao_cadastral — 01=NULA 02=ATIVA 03=SUSPENSA 04=INAPTA 08=BAIXADA\n• cnae — Código CNAE principal (7 dígitos)\n• porte — 00=N/A 01=MICRO 03=PEQUENA 05=DEMAIS\n• page — Número da página (padrão: 1)\n• limit — Itens por página (padrão: 20, máx: 100)",
+      "headers": [],
+      "parameters": [
+        { "name": "nome", "value": "padaria", "description": "Razão social ou nome fantasia (parcial)" },
+        { "name": "uf", "value": "SP", "description": "Sigla do estado" },
+        { "name": "municipio", "value": "campinas", "description": "Nome do município (parcial)" },
+        { "name": "situacao_cadastral", "value": "02", "description": "02 = ATIVA" },
+        { "name": "cnae", "value": "4711301", "description": "Código CNAE (7 dígitos)" },
+        { "name": "porte", "value": "01", "description": "01 = MICROEMPRESA" },
+        { "name": "page", "value": "1" },
+        { "name": "limit", "value": "20" }
+      ]
+    },
+    {
+      "_id": "req_search_nome_uf",
+      "_type": "request",
+      "parentId": "fld_cnpj",
+      "name": "Nome + Estado",
+      "method": "GET",
+      "url": "{{ _.base_url }}/api/v1/cnpjs",
+      "description": "Busca empresas por nome em um estado específico.",
+      "headers": [],
+      "parameters": [
+        { "name": "nome", "value": "mercado" },
+        { "name": "uf", "value": "RJ" },
+        { "name": "page", "value": "1" },
+        { "name": "limit", "value": "20" }
+      ]
+    },
+    {
+      "_id": "req_search_nome_cpf",
+      "_type": "request",
+      "parentId": "fld_cnpj",
+      "name": "Nome + CPF de sócio",
+      "method": "GET",
+      "url": "{{ _.base_url }}/api/v1/cnpjs",
+      "description": "Busca empresas com nome correspondente onde o sócio tenha o CPF informado.",
+      "headers": [],
+      "parameters": [
+        { "name": "nome", "value": "tech" },
+        { "name": "cpf", "value": "98765" },
+        { "name": "page", "value": "1" },
+        { "name": "limit", "value": "20" }
+      ]
+    },
+    {
+      "_id": "req_search_cnae_uf",
+      "_type": "request",
+      "parentId": "fld_cnpj",
+      "name": "Por CNAE + Estado",
+      "method": "GET",
+      "url": "{{ _.base_url }}/api/v1/cnpjs",
+      "description": "Busca empresas de um CNAE específico em um estado. Exemplo: supermercados (4711301) em MG.",
+      "headers": [],
+      "parameters": [
+        { "name": "cnae", "value": "4711301", "description": "Supermercados e hipermercados" },
+        { "name": "uf", "value": "MG" },
+        { "name": "situacao_cadastral", "value": "02", "description": "Apenas ativas" },
+        { "name": "page", "value": "1" },
+        { "name": "limit", "value": "50" }
+      ]
+    }
+  ]
+}

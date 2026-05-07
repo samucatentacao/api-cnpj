@@ -1,0 +1,9 @@
+.git
+.gitignore
+*.md
+.env
+.env.*
+insomnia_collection.json
+.cursor
+terminals
+*.log
