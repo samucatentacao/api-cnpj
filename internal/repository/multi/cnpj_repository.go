@@ -39,6 +39,10 @@ func (m *multiRepository) Search(ctx context.Context, filter model.SearchFilter)
 	return m.primary.Search(ctx, filter)
 }
 
+func (m *multiRepository) GetRandom(ctx context.Context) (*model.EmpresaResult, error) {
+	return m.primary.GetRandom(ctx)
+}
+
 // ─── fan-out helper (para uso futuro em operações de escrita) ─────────────────
 
 func (m *multiRepository) fanOut(ctx context.Context, op func(model.EmpresaRepository) error) error {

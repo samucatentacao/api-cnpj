@@ -24,11 +24,13 @@ func NewEmpresaHandler(svc *service.EmpresaService) *EmpresaHandler {
 func (h *EmpresaHandler) RegisterRoutes(r *gin.RouterGroup) {
 	cnpjs := r.Group("/cnpjs")
 	{
+		// GET /api/v1/cnpjs/random — deve vir ANTES de /:cnpj
+		cnpjs.GET("/random", h.GetRandom)
+
 		// GET /api/v1/cnpjs/:cnpj  — busca exata por CNPJ completo (14 dígitos)
 		cnpjs.GET("/:cnpj", h.GetByCNPJ)
 
 		// GET /api/v1/cnpjs?cnpj=...&nome=...&cpf=...&uf=...&...
-		// Todos os parâmetros são opcionais e combináveis; ao menos um obrigatório.
 		cnpjs.GET("", h.Search)
 	}
 }
@@ -52,6 +54,16 @@ func (h *EmpresaHandler) GetByCNPJ(c *gin.Context) {
 		return
 	}
 
+	c.JSON(http.StatusOK, result)
+}
+
+// GetRandom retorna um CNPJ (estabelecimento) aleatório da base, com o mesmo payload de GetByCNPJ.
+func (h *EmpresaHandler) GetRandom(c *gin.Context) {
+	result, err := h.svc.GetRandom(c.Request.Context())
+	if err != nil {
+		handleError(c, err)
+		return
+	}
 	c.JSON(http.StatusOK, result)
 }
 
@@ -121,6 +133,8 @@ func handleError(c *gin.Context, err error) {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
 	case errors.Is(err, model.ErrNoFilter):
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	case errors.Is(err, model.ErrRandomSample):
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error()})
 	default:
 		log.Printf("ERROR: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "erro interno do servidor", "detail": err.Error()})

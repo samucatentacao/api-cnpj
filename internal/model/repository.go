@@ -11,6 +11,9 @@ type EmpresaRepository interface {
 
 	// GetByCNPJ busca uma empresa pelo CNPJ completo (14 dígitos).
 	GetByCNPJ(ctx context.Context, cnpj string) (*EmpresaResult, error)
+
+	// GetRandom retorna um estabelecimento aleatório (CNPJ completo) com os mesmos dados que GetByCNPJ.
+	GetRandom(ctx context.Context) (*EmpresaResult, error)
 }
 
 // CacheRepository define o contrato para o cache (Redis).

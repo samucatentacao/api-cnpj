@@ -49,6 +49,11 @@ func (s *EmpresaService) GetByCNPJ(ctx context.Context, cnpj string) (*model.Emp
 	return result, nil
 }
 
+// GetRandom retorna um estabelecimento aleatório. Não usa cache para cada chamada ser independente.
+func (s *EmpresaService) GetRandom(ctx context.Context) (*model.EmpresaResult, error) {
+	return s.repo.GetRandom(ctx)
+}
+
 // Search realiza busca combinada. Ao menos um dos campos (CNPJ, Nome, CPF) deve ser informado.
 func (s *EmpresaService) Search(ctx context.Context, f model.SearchFilter) ([]*model.EmpresaResult, int, error) {
 	// Sanitiza entradas

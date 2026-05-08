@@ -50,6 +50,45 @@ func (r *empresaRepository) GetByCNPJ(ctx context.Context, cnpj string) (*model.
 	return results[0], nil
 }
 
+// ─── GetRandom ───────────────────────────────────────────────────────────────
+
+// GetRandom escolhe um estabelecimento ao acerto usando TABLESAMPLE (rápido em tabelas grandes)
+// e depois carrega o registro completo via GetByCNPJ.
+func (r *empresaRepository) GetRandom(ctx context.Context) (*model.EmpresaResult, error) {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	innerLimit := 8000
+	// SYSTEM(n) ≈ n% dos blocos físicos; valores crescentes se a amostra vier vazia.
+	for _, pct := range []float64{0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0} {
+		query := fmt.Sprintf(`
+			SELECT cnpj_basico, cnpj_ordem, cnpj_dv
+			FROM (
+				SELECT cnpj_basico, cnpj_ordem, cnpj_dv
+				FROM cnpj.estabelecimentos TABLESAMPLE SYSTEM(%g)
+				LIMIT %d
+			) s
+			ORDER BY random()
+			LIMIT 1`, pct, innerLimit)
+
+		var basico, ordem, dv string
+		err := r.db.QueryRow(ctx, query).Scan(&basico, &ordem, &dv)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				continue
+			}
+			return nil, fmt.Errorf("postgres.GetRandom: %w", err)
+		}
+		if basico == "" || ordem == "" || dv == "" {
+			continue
+		}
+		cnpj := basico + ordem + dv
+		return r.GetByCNPJ(ctx, cnpj)
+	}
+
+	return nil, model.ErrRandomSample
+}
+
 // ─── Search ──────────────────────────────────────────────────────────────────
 
 func (r *empresaRepository) Search(ctx context.Context, f model.SearchFilter) ([]*model.EmpresaResult, int, error) {

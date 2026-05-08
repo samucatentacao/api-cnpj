@@ -8,4 +8,5 @@ var (
 	ErrInvalidCPF    = errors.New("CPF inválido")
 	ErrCachemiss     = errors.New("chave não encontrada no cache")
 	ErrNoFilter      = errors.New("informe ao menos um parâmetro de busca: cnpj, nome ou cpf")
+	ErrRandomSample  = errors.New("não foi possível obter um CNPJ aleatório neste momento")
 )
