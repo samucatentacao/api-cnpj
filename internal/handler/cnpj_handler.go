@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -47,6 +48,13 @@ func (h *EmpresaHandler) RegisterRoutes(r *gin.RouterGroup) {
 //	@Router      /cnpjs/{cnpj} [get]
 func (h *EmpresaHandler) GetByCNPJ(c *gin.Context) {
 	cnpj := c.Param("cnpj")
+
+	// Se o binário não tiver a rota /random registrada antes de /:cnpj, "random"
+	// cai aqui e o validador de CNPJ falha — trata como aleatório.
+	if strings.EqualFold(strings.TrimSpace(cnpj), "random") {
+		h.GetRandom(c)
+		return
+	}
 
 	result, err := h.svc.GetByCNPJ(c.Request.Context(), cnpj)
 	if err != nil {
