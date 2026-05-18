@@ -100,6 +100,7 @@ func (h *EmpresaHandler) Search(c *gin.Context) {
 		CNPJ:              c.Query("cnpj"),
 		Nome:              c.Query("nome"),
 		CPF:               c.Query("cpf"),
+		NomeSocio:         c.Query("nome_socio"),
 		UF:                c.Query("uf"),
 		Municipio:         c.Query("municipio"),
 		SituacaoCadastral: c.Query("situacao_cadastral"),
@@ -139,7 +140,7 @@ func handleError(c *gin.Context, err error) {
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 	case errors.Is(err, model.ErrInvalidCNPJ):
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
-	case errors.Is(err, model.ErrNoFilter), errors.Is(err, model.ErrCPFTooShort):
+	case errors.Is(err, model.ErrNoFilter), errors.Is(err, model.ErrCPFTooShort), errors.Is(err, model.ErrNomeSocioShort):
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 	case errors.Is(err, model.ErrRandomSample):
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error()})

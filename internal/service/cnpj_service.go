@@ -60,9 +60,14 @@ func (s *EmpresaService) Search(ctx context.Context, f model.SearchFilter) ([]*m
 	f.CNPJ = sanitizeCNPJ(f.CNPJ)
 	f.CPF = sanitizeCPF(f.CPF)
 	f.Nome = strings.TrimSpace(f.Nome)
+	f.NomeSocio = strings.TrimSpace(f.NomeSocio)
 
-	if f.CNPJ == "" && f.Nome == "" && f.CPF == "" {
+	if f.CNPJ == "" && f.Nome == "" && f.CPF == "" && f.NomeSocio == "" {
 		return nil, 0, model.ErrNoFilter
+	}
+
+	if f.NomeSocio != "" && len(f.NomeSocio) < 3 {
+		return nil, 0, model.ErrNomeSocioShort
 	}
 
 	// CPF parcial: na base da Receita o campo vem mascarado (ex: ***247464**).
@@ -93,9 +98,9 @@ func (s *EmpresaService) Search(ctx context.Context, f model.SearchFilter) ([]*m
 		return nil, 0, err
 	}
 
-	if f.CPF != "" {
+	if f.CPF != "" || f.NomeSocio != "" {
 		for _, emp := range results {
-			emp.QSA = filterSociosByCPF(emp.QSA, f.CPF)
+			emp.QSA = filterSociosInResults(emp.QSA, f)
 		}
 	}
 
@@ -132,31 +137,45 @@ func sanitizeCPF(cpf string) string {
 	return strings.TrimSpace(cpf)
 }
 
-// filterSociosByCPF mantém no QSA apenas os sócios cujo CPF/representante bate com a busca.
-func filterSociosByCPF(qsa []model.Socio, cpf string) []model.Socio {
-	cpf = sanitizeCPF(cpf)
-	if cpf == "" || len(qsa) == 0 {
+// filterSociosInResults mantém no QSA só os sócios que batem com cpf e/ou nome_socio da busca.
+func filterSociosInResults(qsa []model.Socio, f model.SearchFilter) []model.Socio {
+	if len(qsa) == 0 {
 		return qsa
 	}
-	digits := cpf
-	if len(cpf) == 11 {
-		digits = cpf[3:9]
-	}
-	masked := "***" + digits + "**"
-
 	var out []model.Socio
 	for _, s := range qsa {
-		doc := strings.TrimSpace(s.CNPJCPFSocio)
-		rep := strings.TrimSpace(s.CPFRepresentanteLegal)
-		if doc == masked || strings.Contains(doc, digits) {
-			out = append(out, s)
-			continue
-		}
-		if rep == masked || strings.Contains(rep, digits) {
+		if socioMatchesFilter(s, f) {
 			out = append(out, s)
 		}
 	}
 	return out
+}
+
+func socioMatchesFilter(s model.Socio, f model.SearchFilter) bool {
+	if f.CPF == "" && f.NomeSocio == "" {
+		return true
+	}
+	if f.NomeSocio != "" {
+		if !strings.Contains(strings.ToUpper(s.NomeSocio), strings.ToUpper(f.NomeSocio)) {
+			return false
+		}
+	}
+	if f.CPF != "" {
+		cpf := sanitizeCPF(f.CPF)
+		digits := cpf
+		if len(cpf) == 11 {
+			digits = cpf[3:9]
+		}
+		masked := "***" + digits + "**"
+		doc := strings.TrimSpace(s.CNPJCPFSocio)
+		rep := strings.TrimSpace(s.CPFRepresentanteLegal)
+		cpfOK := doc == masked || strings.Contains(doc, digits) ||
+			rep == masked || strings.Contains(rep, digits)
+		if !cpfOK {
+			return false
+		}
+	}
+	return true
 }
 
 func validateCNPJ(cnpj string) error {

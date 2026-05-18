@@ -92,12 +92,9 @@ func (r *empresaRepository) GetRandom(ctx context.Context) (*model.EmpresaResult
 // ─── Search ──────────────────────────────────────────────────────────────────
 
 func (r *empresaRepository) Search(ctx context.Context, f model.SearchFilter) ([]*model.EmpresaResult, int, error) {
-	// CPF com 6 dígitos (padrão RFB ***NNNNNN**) ou 11 dígitos → busca rápida por igualdade
-	if f.CPF != "" && f.Nome == "" && f.CNPJ == "" {
-		cpf := sanitize(f.CPF)
-		if len(cpf) == 6 || len(cpf) == 11 {
-			return r.searchCPFMasked(ctx, f, cpf)
-		}
+	// Busca via cnpj.socios (CPF mascarado e/ou nome do sócio), sem nome/CNPJ da empresa
+	if f.Nome == "" && f.CNPJ == "" && r.canSearchViaSocios(f) {
+		return r.searchViaSocios(ctx, f)
 	}
 
 	timeout := 30 * time.Second
@@ -139,15 +136,21 @@ func (r *empresaRepository) Search(ctx context.Context, f model.SearchFilter) ([
 		n++
 	}
 
-	// ── CPF de sócio (completo ou parcial) ────────────────────────────────────
-	// Na base aberta da RFB o CPF costuma vir mascarado (***247464**). Busca em
-	// cnpj_cpf_do_socio e representante_legal, partindo da tabela socios (mais rápido).
+	// ── CPF / nome do sócio (caminho lento — ILIKE / parcial curto) ─────────────
 	if f.CPF != "" {
 		cpf := sanitize(f.CPF)
 		cond, condArgs := cpfSocioFilter(n, cpf)
 		conditions = append(conditions, cond)
 		args = append(args, condArgs...)
 		n += len(condArgs)
+	}
+	if f.NomeSocio != "" {
+		conditions = append(conditions, fmt.Sprintf(`e.cnpj_basico IN (
+			SELECT DISTINCT s.cnpj_basico FROM cnpj.socios s
+			WHERE s.nome_socio ILIKE '%%' || $%d || '%%'
+		)`, n))
+		args = append(args, f.NomeSocio)
+		n++
 	}
 
 	// ── Filtros adicionais ────────────────────────────────────────────────────
@@ -224,17 +227,18 @@ func (r *empresaRepository) Search(ctx context.Context, f model.SearchFilter) ([
 	return results, total, nil
 }
 
-// searchCPFMasked busca por CPF no formato da Receita (***247464**) em duas etapas:
-// 1) chaves em estabelecimentos (rápido)  2) detalhe só dos N selecionados.
-func (r *empresaRepository) searchCPFMasked(ctx context.Context, f model.SearchFilter, cpf string) ([]*model.EmpresaResult, int, error) {
-	ctx, cancel := context.WithTimeout(ctx, 25*time.Second)
-	defer cancel()
-
-	digits := cpf
-	if len(cpf) == 11 {
-		digits = cpf[3:9]
+func (r *empresaRepository) canSearchViaSocios(f model.SearchFilter) bool {
+	if f.NomeSocio != "" {
+		return true
 	}
-	masked := "***" + digits + "**"
+	cpf := sanitize(f.CPF)
+	return len(cpf) == 6 || len(cpf) == 11
+}
+
+// searchViaSocios busca empresas a partir de cnpj.socios (CPF mascarado e/ou nome_socio).
+func (r *empresaRepository) searchViaSocios(ctx context.Context, f model.SearchFilter) ([]*model.EmpresaResult, int, error) {
+	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
 
 	limit := f.Limit
 	if limit <= 0 || limit > 100 {
@@ -246,18 +250,20 @@ func (r *empresaRepository) searchCPFMasked(ctx context.Context, f model.SearchF
 	}
 	offset := (page - 1) * limit
 
-	socioSQL, socioArgs := cpfSocioWhereSQL(1, masked, digits)
+	socioSQL, socioArgs, err := buildSocioWhereClause(f, 1)
+	if err != nil {
+		return nil, 0, err
+	}
 
 	var total int
 	if err := r.db.QueryRow(ctx,
 		fmt.Sprintf(`SELECT COUNT(DISTINCT s.cnpj_basico) FROM cnpj.socios s WHERE %s`, socioSQL),
 		socioArgs...,
 	).Scan(&total); err != nil {
-		return nil, 0, fmt.Errorf("postgres.searchCPFMasked count: %w", err)
+		return nil, 0, fmt.Errorf("postgres.searchViaSocios count: %w", err)
 	}
 
-	// Etapa 1: lista leve de estabelecimentos (evita JOIN pesado em toda a base)
-	keyArgs := make([]any, 0, 8)
+	keyArgs := make([]any, 0, 12)
 	keyArgs = append(keyArgs, socioArgs...)
 	keyN := len(keyArgs) + 1
 	keyWhere := []string{fmt.Sprintf(`est.cnpj_basico IN (
@@ -279,6 +285,20 @@ func (r *empresaRepository) searchCPFMasked(ctx context.Context, f model.SearchF
 		keyArgs = append(keyArgs, f.CNAE)
 		keyN++
 	}
+	if f.Municipio != "" {
+		keyWhere = append(keyWhere, fmt.Sprintf(`est.municipio IN (
+			SELECT codigo FROM cnpj.municipios WHERE descricao ILIKE '%%' || $%d || '%%'
+		)`, keyN))
+		keyArgs = append(keyArgs, f.Municipio)
+		keyN++
+	}
+	if f.Porte != "" {
+		keyWhere = append(keyWhere, fmt.Sprintf(`est.cnpj_basico IN (
+			SELECT cnpj_basico FROM cnpj.empresas WHERE porte = $%d
+		)`, keyN))
+		keyArgs = append(keyArgs, f.Porte)
+		keyN++
+	}
 
 	keyQ := fmt.Sprintf(`
 		SELECT est.cnpj_basico, est.cnpj_ordem, est.cnpj_dv
@@ -291,7 +311,7 @@ func (r *empresaRepository) searchCPFMasked(ctx context.Context, f model.SearchF
 
 	keyRows, err := r.db.Query(ctx, keyQ, keyArgs...)
 	if err != nil {
-		return nil, 0, fmt.Errorf("postgres.searchCPFMasked keys: %w", err)
+		return nil, 0, fmt.Errorf("postgres.searchViaSocios keys: %w", err)
 	}
 	defer keyRows.Close()
 
@@ -311,7 +331,6 @@ func (r *empresaRepository) searchCPFMasked(ctx context.Context, f model.SearchF
 		return []*model.EmpresaResult{}, total, nil
 	}
 
-	// Etapa 2: detalhe completo só dos estabelecimentos escolhidos
 	tuples := make([]string, len(keys))
 	detailArgs := make([]any, 0, len(keys)*3)
 	for i, k := range keys {
@@ -326,7 +345,7 @@ func (r *empresaRepository) searchCPFMasked(ctx context.Context, f model.SearchF
 
 	rows, err := r.db.Query(ctx, detailQ, detailArgs...)
 	if err != nil {
-		return nil, 0, fmt.Errorf("postgres.searchCPFMasked detail: %w", err)
+		return nil, 0, fmt.Errorf("postgres.searchViaSocios detail: %w", err)
 	}
 	defer rows.Close()
 
@@ -542,13 +561,42 @@ func loadSocios(ctx context.Context, db *pgxpool.Pool, cnpjBasico string) ([]mod
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-// cpfSocioWhereSQL condição WHERE em cnpj.socios com placeholders a partir de startN.
-func cpfSocioWhereSQL(startN int, masked, digits string) (string, []any) {
-	return fmt.Sprintf(`(
-		s.cnpj_cpf_do_socio = $%d
-		OR s.representante_legal = $%d
-		OR s.representante_legal LIKE '%%' || $%d || '%%'
-	)`, startN, startN, startN+1), []any{masked, digits}
+// buildSocioWhereClause monta WHERE em cnpj.socios para CPF (mascarado) e/ou nome_socio.
+func buildSocioWhereClause(f model.SearchFilter, startN int) (string, []any, error) {
+	parts := []string{}
+	args := []any{}
+	n := startN
+
+	if f.CPF != "" {
+		cpf := sanitize(f.CPF)
+		if len(cpf) != 6 && len(cpf) != 11 {
+			return "", nil, fmt.Errorf("CPF deve ter 6 ou 11 dígitos no caminho rápido")
+		}
+		digits := cpf
+		if len(cpf) == 11 {
+			digits = cpf[3:9]
+		}
+		masked := "***" + digits + "**"
+		parts = append(parts, fmt.Sprintf(`(
+			s.cnpj_cpf_do_socio = $%d
+			OR s.representante_legal = $%d
+			OR s.representante_legal LIKE '%%' || $%d || '%%'
+		)`, n, n, n+1))
+		args = append(args, masked, digits)
+		n += 2
+	}
+
+	if f.NomeSocio != "" {
+		parts = append(parts, fmt.Sprintf(`s.nome_socio ILIKE '%%' || $%d || '%%'`, n))
+		args = append(args, f.NomeSocio)
+		n++
+	}
+
+	if len(parts) == 0 {
+		return "", nil, fmt.Errorf("nenhum critério de sócio informado")
+	}
+
+	return strings.Join(parts, " AND "), args, nil
 }
 
 // cpfSocioFilter monta condição IN (socios) para CPF parcial (4–5 dígitos) com ILIKE.

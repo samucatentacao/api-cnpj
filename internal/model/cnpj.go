@@ -91,6 +91,9 @@ type SearchFilter struct {
 	// Na base RFB o CPF vem mascarado: ***NNNNNN** (use os 6 dígitos visíveis ou os 11 do CPF completo).
 	CPF string `form:"cpf"`
 
+	// Busca por nome do sócio (cnpj.socios.nome_socio) — parcial, sem acento.
+	NomeSocio string `form:"nome_socio"`
+
 	// Filtros adicionais
 	UF                string `form:"uf"`
 	Municipio         string `form:"municipio"`
