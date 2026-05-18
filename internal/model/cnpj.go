@@ -87,7 +87,8 @@ type SearchFilter struct {
 	// Busca por nome (razão social ou nome fantasia) — busca parcial, case-insensitive
 	Nome string `form:"nome"`
 
-	// Busca por CPF de sócio (completo: 11 dígitos, ou parcial: qualquer substring)
+	// Busca por CPF do quadro societário (tabela cnpj.socios).
+	// Na base RFB o CPF vem mascarado: ***NNNNNN** (use os 6 dígitos visíveis ou os 11 do CPF completo).
 	CPF string `form:"cpf"`
 
 	// Filtros adicionais

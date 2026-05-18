@@ -84,7 +84,7 @@ func (h *EmpresaHandler) GetRandom(c *gin.Context) {
 //	@Tags        cnpj
 //	@Param       cnpj               query string false "CNPJ completo (14 dígitos) ou parcial (8 dígitos do bloco básico)"
 //	@Param       nome               query string false "Razão social ou nome fantasia (busca parcial)"
-//	@Param       cpf                query string false "CPF do sócio — completo (11 dígitos) ou parcial"
+//	@Param       cpf                query string false "CPF do sócio (cnpj.socios) — 6 dígitos visíveis ex: 247464 ou 11 dígitos completos"
 //	@Param       uf                 query string false "Sigla do estado (ex: SP)"
 //	@Param       municipio          query string false "Nome do município (busca parcial)"
 //	@Param       situacao_cadastral query string false "Código da situação cadastral (ex: 02=ATIVA)"

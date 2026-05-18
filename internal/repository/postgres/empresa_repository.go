@@ -246,18 +246,23 @@ func (r *empresaRepository) searchCPFMasked(ctx context.Context, f model.SearchF
 	}
 	offset := (page - 1) * limit
 
-	socioWhere := `s.cnpj_cpf_do_socio = $1 OR s.representante_legal = $1`
+	// CPF do sócio (campo mascarado ***NNNNNN**) ou CPF do representante legal
+	socioWhere := `(
+		s.cnpj_cpf_do_socio = $1
+		OR s.representante_legal = $1
+		OR s.representante_legal LIKE '%' || $2 || '%'
+	)`
 
 	var total int
 	if err := r.db.QueryRow(ctx,
 		fmt.Sprintf(`SELECT COUNT(DISTINCT s.cnpj_basico) FROM cnpj.socios s WHERE %s`, socioWhere),
-		masked,
+		masked, digits,
 	).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("postgres.searchCPFMasked count: %w", err)
 	}
 
 	// Etapa 1: lista leve de estabelecimentos (evita JOIN pesado em toda a base)
-	keyArgs := []any{masked}
+	keyArgs := []any{masked, digits}
 	keyN := 2
 	keyWhere := []string{fmt.Sprintf(`est.cnpj_basico IN (
 		SELECT DISTINCT s.cnpj_basico FROM cnpj.socios s WHERE %s
@@ -329,7 +334,7 @@ func (r *empresaRepository) searchCPFMasked(ctx context.Context, f model.SearchF
 	}
 	defer rows.Close()
 
-	results, err := scanEmpresas(ctx, r.db, rows, false)
+	results, err := scanEmpresas(ctx, r.db, rows, true)
 	if err != nil {
 		return nil, 0, err
 	}
