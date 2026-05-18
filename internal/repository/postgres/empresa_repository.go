@@ -92,8 +92,12 @@ func (r *empresaRepository) GetRandom(ctx context.Context) (*model.EmpresaResult
 // ─── Search ──────────────────────────────────────────────────────────────────
 
 func (r *empresaRepository) Search(ctx context.Context, f model.SearchFilter) ([]*model.EmpresaResult, int, error) {
-	// Timeout de 30s para evitar queries longas em tabelas grandes sem índice
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	timeout := 30 * time.Second
+	if f.CPF != "" {
+		// Busca por CPF em socios sem índice trigram pode levar ~40–60s em bases grandes
+		timeout = 60 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	args := []any{}
