@@ -92,6 +92,11 @@ func (r *empresaRepository) GetRandom(ctx context.Context) (*model.EmpresaResult
 // ─── Search ──────────────────────────────────────────────────────────────────
 
 func (r *empresaRepository) Search(ctx context.Context, f model.SearchFilter) ([]*model.EmpresaResult, int, error) {
+	// CNPJ completo (14 dígitos) sozinho → mesma rota rápida de GET /cnpjs/:cnpj (PK).
+	if isExactCNPJOnlySearch(f) {
+		return r.searchByCNPJExact(ctx, f)
+	}
+
 	// Busca via cnpj.socios (CPF mascarado e/ou nome do sócio), sem nome/CNPJ da empresa
 	if f.Nome == "" && f.CNPJ == "" && r.canSearchViaSocios(f) {
 		return r.searchViaSocios(ctx, f)
@@ -114,16 +119,18 @@ func (r *empresaRepository) Search(ctx context.Context, f model.SearchFilter) ([
 		switch len(cnpj) {
 		case 14:
 			conditions = append(conditions,
-				fmt.Sprintf("(e.cnpj_basico || est.cnpj_ordem || est.cnpj_dv) = $%d", n))
-			args = append(args, cnpj)
+				fmt.Sprintf("e.cnpj_basico = $%d AND est.cnpj_ordem = $%d AND est.cnpj_dv = $%d", n, n+1, n+2))
+			args = append(args, cnpj[:8], cnpj[8:12], cnpj[12:14])
+			n += 3
 		case 8:
 			conditions = append(conditions, fmt.Sprintf("e.cnpj_basico = $%d", n))
 			args = append(args, cnpj)
+			n++
 		default:
 			conditions = append(conditions, fmt.Sprintf("e.cnpj_basico LIKE $%d", n))
 			args = append(args, cnpj+"%")
+			n++
 		}
-		n++
 	}
 
 	// ── Nome (razão social ou nome fantasia) ──────────────────────────────────
@@ -195,17 +202,20 @@ func (r *empresaRepository) Search(ctx context.Context, f model.SearchFilter) ([
 	}
 	offset := (page - 1) * limit
 
-	// COUNT total
-	countQuery := fmt.Sprintf(`
-		SELECT COUNT(*)
-		FROM cnpj.empresas e
-		JOIN cnpj.estabelecimentos est ON est.cnpj_basico = e.cnpj_basico
-		LEFT JOIN cnpj.municipios mun ON mun.codigo = est.municipio
-		%s`, where)
-
 	var total int
-	if err := r.db.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
-		return nil, 0, fmt.Errorf("postgres.Search count: %w", err)
+	// COUNT desnecessário quando o filtro é CNPJ de 14 dígitos (no máximo 1 estabelecimento).
+	if len(conditions) == 1 && f.CNPJ != "" && len(sanitize(f.CNPJ)) == 14 {
+		total = 1
+	} else {
+		countQuery := fmt.Sprintf(`
+			SELECT COUNT(*)
+			FROM cnpj.empresas e
+			JOIN cnpj.estabelecimentos est ON est.cnpj_basico = e.cnpj_basico
+			LEFT JOIN cnpj.municipios mun ON mun.codigo = est.municipio
+			%s`, where)
+		if err := r.db.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
+			return nil, 0, fmt.Errorf("postgres.Search count: %w", err)
+		}
 	}
 
 	// Dados paginados
@@ -225,6 +235,28 @@ func (r *empresaRepository) Search(ctx context.Context, f model.SearchFilter) ([
 	}
 
 	return results, total, nil
+}
+
+func isExactCNPJOnlySearch(f model.SearchFilter) bool {
+	if f.CNPJ == "" || f.Nome != "" || f.CPF != "" || f.NomeSocio != "" {
+		return false
+	}
+	if f.UF != "" || f.Municipio != "" || f.SituacaoCadastral != "" || f.CNAE != "" || f.Porte != "" {
+		return false
+	}
+	return len(sanitize(f.CNPJ)) == 14
+}
+
+func (r *empresaRepository) searchByCNPJExact(ctx context.Context, f model.SearchFilter) ([]*model.EmpresaResult, int, error) {
+	cnpj := sanitize(f.CNPJ)
+	result, err := r.GetByCNPJ(ctx, cnpj)
+	if err != nil {
+		if errors.Is(err, model.ErrNotFound) {
+			return []*model.EmpresaResult{}, 0, nil
+		}
+		return nil, 0, err
+	}
+	return []*model.EmpresaResult{result}, 1, nil
 }
 
 func (r *empresaRepository) canSearchViaSocios(f model.SearchFilter) bool {
