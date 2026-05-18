@@ -246,27 +246,23 @@ func (r *empresaRepository) searchCPFMasked(ctx context.Context, f model.SearchF
 	}
 	offset := (page - 1) * limit
 
-	// CPF do sócio (campo mascarado ***NNNNNN**) ou CPF do representante legal
-	socioWhere := `(
-		s.cnpj_cpf_do_socio = $1
-		OR s.representante_legal = $1
-		OR s.representante_legal LIKE '%' || $2 || '%'
-	)`
+	socioSQL, socioArgs := cpfSocioWhereSQL(1, masked, digits)
 
 	var total int
 	if err := r.db.QueryRow(ctx,
-		fmt.Sprintf(`SELECT COUNT(DISTINCT s.cnpj_basico) FROM cnpj.socios s WHERE %s`, socioWhere),
-		masked, digits,
+		fmt.Sprintf(`SELECT COUNT(DISTINCT s.cnpj_basico) FROM cnpj.socios s WHERE %s`, socioSQL),
+		socioArgs...,
 	).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("postgres.searchCPFMasked count: %w", err)
 	}
 
 	// Etapa 1: lista leve de estabelecimentos (evita JOIN pesado em toda a base)
-	keyArgs := []any{masked, digits}
-	keyN := 2
+	keyArgs := make([]any, 0, 8)
+	keyArgs = append(keyArgs, socioArgs...)
+	keyN := len(keyArgs) + 1
 	keyWhere := []string{fmt.Sprintf(`est.cnpj_basico IN (
 		SELECT DISTINCT s.cnpj_basico FROM cnpj.socios s WHERE %s
-	)`, socioWhere)}
+	)`, socioSQL)}
 
 	if f.UF != "" {
 		keyWhere = append(keyWhere, fmt.Sprintf("est.uf = $%d", keyN))
@@ -319,8 +315,8 @@ func (r *empresaRepository) searchCPFMasked(ctx context.Context, f model.SearchF
 	tuples := make([]string, len(keys))
 	detailArgs := make([]any, 0, len(keys)*3)
 	for i, k := range keys {
-		base := i * 3
-		tuples[i] = fmt.Sprintf("($%d,$%d,$%d)", base+1, base+2, base+3)
+		p := len(detailArgs) + 1
+		tuples[i] = fmt.Sprintf("($%d,$%d,$%d)", p, p+1, p+2)
 		detailArgs = append(detailArgs, k.basico, k.ordem, k.dv)
 	}
 
@@ -545,6 +541,15 @@ func loadSocios(ctx context.Context, db *pgxpool.Pool, cnpjBasico string) ([]mod
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+// cpfSocioWhereSQL condição WHERE em cnpj.socios com placeholders a partir de startN.
+func cpfSocioWhereSQL(startN int, masked, digits string) (string, []any) {
+	return fmt.Sprintf(`(
+		s.cnpj_cpf_do_socio = $%d
+		OR s.representante_legal = $%d
+		OR s.representante_legal LIKE '%%' || $%d || '%%'
+	)`, startN, startN, startN+1), []any{masked, digits}
+}
 
 // cpfSocioFilter monta condição IN (socios) para CPF parcial (4–5 dígitos) com ILIKE.
 func cpfSocioFilter(startN int, cpf string) (string, []any) {
