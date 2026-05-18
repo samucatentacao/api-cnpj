@@ -237,6 +237,13 @@ func (r *empresaRepository) canSearchViaSocios(f model.SearchFilter) bool {
 
 // searchViaSocios busca empresas a partir de cnpj.socios (CPF mascarado e/ou nome_socio).
 func (r *empresaRepository) searchViaSocios(ctx context.Context, f model.SearchFilter) ([]*model.EmpresaResult, int, error) {
+	if f.CPF != "" && f.NomeSocio != "" {
+		cpf := sanitize(f.CPF)
+		if len(cpf) == 6 || len(cpf) == 11 {
+			return r.searchViaSociosCPFAndNome(ctx, f, cpf)
+		}
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
 
@@ -350,6 +357,171 @@ func (r *empresaRepository) searchViaSocios(ctx context.Context, f model.SearchF
 	defer rows.Close()
 
 	results, err := scanEmpresas(ctx, r.db, rows, true)
+	if err != nil {
+		return nil, 0, err
+	}
+	return results, total, nil
+}
+
+// searchViaSociosCPFAndNome: filtra primeiro por CPF (rápido), depois nome do sócio em memória.
+func (r *empresaRepository) searchViaSociosCPFAndNome(ctx context.Context, f model.SearchFilter, cpf string) ([]*model.EmpresaResult, int, error) {
+	ctx, cancel := context.WithTimeout(ctx, 25*time.Second)
+	defer cancel()
+
+	masked, digits := cpfMasked(cpf)
+	nomeNeedle := strings.ToUpper(f.NomeSocio)
+
+	rows, err := r.db.Query(ctx, `
+		SELECT DISTINCT s.cnpj_basico,
+		       COALESCE(s.nome_socio, ''),
+		       COALESCE(s.nome_do_representante, ''),
+		       COALESCE(s.cnpj_cpf_do_socio, ''),
+		       COALESCE(s.representante_legal, '')
+		FROM cnpj.socios s
+		WHERE s.cnpj_cpf_do_socio = $1
+		   OR s.representante_legal = $1
+		   OR s.representante_legal LIKE '%' || $2 || '%'`, masked, digits)
+	if err != nil {
+		return nil, 0, fmt.Errorf("postgres.searchViaSociosCPFAndNome socios: %w", err)
+	}
+	defer rows.Close()
+
+	basicoSet := make(map[string]struct{})
+	for rows.Next() {
+		var basico, nomeSocio, nomeRep, doc, rep string
+		if err := rows.Scan(&basico, &nomeSocio, &nomeRep, &doc, &rep); err != nil {
+			return nil, 0, err
+		}
+		if strings.Contains(strings.ToUpper(nomeSocio), nomeNeedle) ||
+			strings.Contains(strings.ToUpper(nomeRep), nomeNeedle) {
+			basicoSet[basico] = struct{}{}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+
+	basicos := make([]string, 0, len(basicoSet))
+	for b := range basicoSet {
+		basicos = append(basicos, b)
+	}
+	total := len(basicos)
+	if total == 0 {
+		return []*model.EmpresaResult{}, 0, nil
+	}
+
+	return r.fetchEstabelecimentosForBasicos(ctx, f, basicos, total)
+}
+
+func cpfMasked(cpf string) (masked, digits string) {
+	digits = cpf
+	if len(cpf) == 11 {
+		digits = cpf[3:9]
+	}
+	return "***" + digits + "**", digits
+}
+
+// fetchEstabelecimentosForBasicos lista estabelecimentos dos cnpj_basico e carrega detalhe.
+func (r *empresaRepository) fetchEstabelecimentosForBasicos(ctx context.Context, f model.SearchFilter, basicos []string, total int) ([]*model.EmpresaResult, int, error) {
+	limit := f.Limit
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	page := f.Page
+	if page <= 0 {
+		page = 1
+	}
+	offset := (page - 1) * limit
+
+	placeholders := make([]string, len(basicos))
+	args := make([]any, len(basicos))
+	for i, b := range basicos {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+		args[i] = b
+	}
+	n := len(basicos) + 1
+
+	keyWhere := []string{fmt.Sprintf("est.cnpj_basico IN (%s)", strings.Join(placeholders, ","))}
+	if f.UF != "" {
+		keyWhere = append(keyWhere, fmt.Sprintf("est.uf = $%d", n))
+		args = append(args, strings.ToUpper(f.UF))
+		n++
+	}
+	if f.SituacaoCadastral != "" {
+		keyWhere = append(keyWhere, fmt.Sprintf("est.situacao_cadastral = $%d", n))
+		args = append(args, f.SituacaoCadastral)
+		n++
+	}
+	if f.CNAE != "" {
+		keyWhere = append(keyWhere, fmt.Sprintf("est.cnae_fiscal_principal = $%d", n))
+		args = append(args, f.CNAE)
+		n++
+	}
+	if f.Municipio != "" {
+		keyWhere = append(keyWhere, fmt.Sprintf(`est.municipio IN (
+			SELECT codigo FROM cnpj.municipios WHERE descricao ILIKE '%%' || $%d || '%%'
+		)`, n))
+		args = append(args, f.Municipio)
+		n++
+	}
+	if f.Porte != "" {
+		keyWhere = append(keyWhere, fmt.Sprintf(`est.cnpj_basico IN (
+			SELECT cnpj_basico FROM cnpj.empresas WHERE porte = $%d
+		)`, n))
+		args = append(args, f.Porte)
+		n++
+	}
+
+	keyQ := fmt.Sprintf(`
+		SELECT est.cnpj_basico, est.cnpj_ordem, est.cnpj_dv
+		FROM cnpj.estabelecimentos est
+		WHERE %s
+		ORDER BY est.cnpj_basico, est.cnpj_ordem
+		LIMIT $%d OFFSET $%d`,
+		strings.Join(keyWhere, " AND "), n, n+1)
+	args = append(args, limit, offset)
+
+	keyRows, err := r.db.Query(ctx, keyQ, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("fetchEstabelecimentosForBasicos keys: %w", err)
+	}
+	defer keyRows.Close()
+
+	type estKey struct{ basico, ordem, dv string }
+	var keys []estKey
+	for keyRows.Next() {
+		var k estKey
+		if err := keyRows.Scan(&k.basico, &k.ordem, &k.dv); err != nil {
+			return nil, 0, err
+		}
+		keys = append(keys, k)
+	}
+	if err := keyRows.Err(); err != nil {
+		return nil, 0, err
+	}
+	if len(keys) == 0 {
+		return []*model.EmpresaResult{}, total, nil
+	}
+
+	tuples := make([]string, len(keys))
+	detailArgs := make([]any, 0, len(keys)*3)
+	for i, k := range keys {
+		p := len(detailArgs) + 1
+		tuples[i] = fmt.Sprintf("($%d,$%d,$%d)", p, p+1, p+2)
+		detailArgs = append(detailArgs, k.basico, k.ordem, k.dv)
+	}
+
+	detailQ := baseSelectQuery() + fmt.Sprintf(`
+		WHERE (e.cnpj_basico, est.cnpj_ordem, est.cnpj_dv) IN (%s)
+		ORDER BY e.razao_social`, strings.Join(tuples, ","))
+
+	drows, err := r.db.Query(ctx, detailQ, detailArgs...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("fetchEstabelecimentosForBasicos detail: %w", err)
+	}
+	defer drows.Close()
+
+	results, err := scanEmpresas(ctx, r.db, drows, true)
 	if err != nil {
 		return nil, 0, err
 	}
