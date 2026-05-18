@@ -98,12 +98,6 @@ func (s *EmpresaService) Search(ctx context.Context, f model.SearchFilter) ([]*m
 		return nil, 0, err
 	}
 
-	if f.CPF != "" || f.NomeSocio != "" {
-		for _, emp := range results {
-			emp.QSA = filterSociosInResults(emp.QSA, f)
-		}
-	}
-
 	if data, err := json.Marshal(searchPayload{Data: results, Total: total}); err == nil {
 		_ = s.cache.Set(ctx, cacheKey, string(data), 300) // 5 min para buscas
 	}
@@ -135,47 +129,6 @@ func sanitizeCPF(cpf string) string {
 	cpf = strings.ReplaceAll(cpf, ".", "")
 	cpf = strings.ReplaceAll(cpf, "-", "")
 	return strings.TrimSpace(cpf)
-}
-
-// filterSociosInResults mantém no QSA só os sócios que batem com cpf e/ou nome_socio da busca.
-func filterSociosInResults(qsa []model.Socio, f model.SearchFilter) []model.Socio {
-	if len(qsa) == 0 {
-		return qsa
-	}
-	var out []model.Socio
-	for _, s := range qsa {
-		if socioMatchesFilter(s, f) {
-			out = append(out, s)
-		}
-	}
-	return out
-}
-
-func socioMatchesFilter(s model.Socio, f model.SearchFilter) bool {
-	if f.CPF == "" && f.NomeSocio == "" {
-		return true
-	}
-	if f.NomeSocio != "" {
-		if !strings.Contains(strings.ToUpper(s.NomeSocio), strings.ToUpper(f.NomeSocio)) {
-			return false
-		}
-	}
-	if f.CPF != "" {
-		cpf := sanitizeCPF(f.CPF)
-		digits := cpf
-		if len(cpf) == 11 {
-			digits = cpf[3:9]
-		}
-		masked := "***" + digits + "**"
-		doc := strings.TrimSpace(s.CNPJCPFSocio)
-		rep := strings.TrimSpace(s.CPFRepresentanteLegal)
-		cpfOK := doc == masked || strings.Contains(doc, digits) ||
-			rep == masked || strings.Contains(rep, digits)
-		if !cpfOK {
-			return false
-		}
-	}
-	return true
 }
 
 func validateCNPJ(cnpj string) error {
