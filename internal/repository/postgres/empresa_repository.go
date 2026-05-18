@@ -129,23 +129,14 @@ func (r *empresaRepository) Search(ctx context.Context, f model.SearchFilter) ([
 	}
 
 	// ── CPF de sócio (completo ou parcial) ────────────────────────────────────
+	// Na base aberta da RFB o CPF costuma vir mascarado (***247464**). Busca em
+	// cnpj_cpf_do_socio e representante_legal, partindo da tabela socios (mais rápido).
 	if f.CPF != "" {
 		cpf := sanitize(f.CPF)
-		if len(cpf) == 11 {
-			conditions = append(conditions, fmt.Sprintf(`EXISTS (
-				SELECT 1 FROM cnpj.socios s2
-				WHERE s2.cnpj_basico = e.cnpj_basico
-				  AND s2.cnpj_cpf_do_socio = $%d
-			)`, n))
-		} else {
-			conditions = append(conditions, fmt.Sprintf(`EXISTS (
-				SELECT 1 FROM cnpj.socios s2
-				WHERE s2.cnpj_basico = e.cnpj_basico
-				  AND s2.cnpj_cpf_do_socio LIKE '%%' || $%d || '%%'
-			)`, n))
-		}
-		args = append(args, cpf)
-		n++
+		cond, condArgs := cpfSocioFilter(n, cpf)
+		conditions = append(conditions, cond)
+		args = append(args, condArgs...)
+		n += len(condArgs)
 	}
 
 	// ── Filtros adicionais ────────────────────────────────────────────────────
@@ -422,6 +413,38 @@ func loadSocios(ctx context.Context, db *pgxpool.Pool, cnpjBasico string) ([]mod
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+// cpfSocioFilter monta condição que parte de cnpj.socios (evita EXISTS por linha de estabelecimento).
+// Na RFB, CPF de PF costuma aparecer como ***NNNNNN** (6 dígitos visíveis no meio).
+func cpfSocioFilter(startN int, cpf string) (string, []any) {
+	match := func(n int) string {
+		return fmt.Sprintf(`(
+			s.cnpj_cpf_do_socio ILIKE '%%' || $%d || '%%'
+			OR s.representante_legal ILIKE '%%' || $%d || '%%'
+		)`, n, n)
+	}
+
+	if len(cpf) == 11 {
+		// CPF completo: igualdade exata + trecho mascarado (posições 4–9) + LIKE geral
+		middle := cpf[3:9]
+		n := startN
+		cond := fmt.Sprintf(`e.cnpj_basico IN (
+			SELECT DISTINCT s.cnpj_basico FROM cnpj.socios s
+			WHERE s.cnpj_cpf_do_socio = $%d
+			   OR s.representante_legal = $%d
+			   OR %s
+			   OR %s
+		)`, n, n+1, match(n+2), match(n+3))
+		return cond, []any{cpf, cpf, middle, cpf}
+	}
+
+	n := startN
+	cond := fmt.Sprintf(`e.cnpj_basico IN (
+		SELECT DISTINCT s.cnpj_basico FROM cnpj.socios s
+		WHERE %s
+	)`, match(n))
+	return cond, []any{cpf}
+}
 
 func sanitize(s string) string {
 	s = strings.ReplaceAll(s, ".", "")

@@ -65,6 +65,12 @@ func (s *EmpresaService) Search(ctx context.Context, f model.SearchFilter) ([]*m
 		return nil, 0, model.ErrNoFilter
 	}
 
+	// CPF parcial: na base da Receita o campo vem mascarado (ex: ***247464**).
+	// Exige ao menos 4 dígitos para não varrer a tabela inteira.
+	if f.CPF != "" && len(f.CPF) != 11 && len(f.CPF) < 4 {
+		return nil, 0, model.ErrCPFTooShort
+	}
+
 	// Paginação segura
 	if f.Limit <= 0 || f.Limit > 100 {
 		f.Limit = 20
